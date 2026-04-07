@@ -1,0 +1,52 @@
+// [
+//   {
+//     "type": "function",
+//     "name": "submitMeterReading",
+//     "description": "Відправляє адресу клієнта та показники лічильника в базу даних ДТЕК.",
+//     "parameters": {
+//       "type": "object",
+//       "properties": {
+//         "fullAddress": {
+//           "type": "string",
+//           "description": "Повна адреса, підтверджена користувачем."
+//         },
+//         "readingValue": {
+//           "type": "integer",
+//           "description": "Числове значення показників лічильника."
+//         }
+//       },
+//       "required": ["fullAddress", "readingValue"]
+//     }
+//   },
+//   {
+//     "name": "endCall",
+//     "type": "function",
+//     "description": "Завершити дзвінок після того, як дані прийняті або клієнт хоче закінчити розмову."
+//   },
+//   {
+//     "type": "function",
+//     "name": "transferToAgent",
+//     "description": "Переключити дзвінок на оператора, якщо виникла проблема або прямий запит клієнта.",
+//     "parameters": {
+//       "type": "object",
+//       "properties": {
+//         "slots": {
+//           "type": "array",
+//           "items": {
+//             "type": "object",
+//             "properties": {
+//               "name": { "type": "string" },
+//               "value": { "type": "string" }
+//             }
+//           }
+//         },
+//         "process": {
+//           "type": "string",
+//           "enum": ["MeterReading", "AddressIssue", "TechnicalError", "OtherRequest"]
+//         }
+//       },
+//       "required": ["process"]
+//     }
+//   }
+// ]
+[]

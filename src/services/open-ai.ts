@@ -1,221 +1,142 @@
-import dotenv from 'dotenv';
+import dotenv from "dotenv";
 dotenv.config();
 
-import WebSocket from 'ws';
-import { Session } from '../websocket/session';
-import { VoiceAIAgentBaseClass } from './voice-aiagent-base';
-import { searchFlight, createItinerary } from './open-ai-tools';
-import { getNoInputTimeout } from '../common/environment-variables';
+import WebSocket from "ws";
+import { Session } from "../websocket/session";
+import { VoiceAIAgentBaseClass } from "./voice-aiagent-base";
+import { getNoInputTimeout } from "../common/environment-variables";
 
-// Retrieve the OpenAI API key from environment variables.
 let { OPENAI_API_KEY } = process.env;
-const OPENAI_MODEL_ENDPOINT = process.env.OPENAI_MODEL_ENDPOINT || 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview';
-
-if (!OPENAI_API_KEY) {
-    console.error(new Date().toISOString() + ':[OpenAI] Missing OpenAI API key. Please set it in the .env file.');
-    process.exit(1);
-}
-
-const INITIAL_GREETING = process.env.INITIAL_GREETING || 'Hello';
-const VOICE = process.env.OPENAI_VOICE_ID || 'alloy';
-
-const LOG_EVENT_TYPES = [
-    'error',
-    'response.done',
-    'session.created',
-    'session.updated',
-    'response.output_item.done'
-];
+const OPENAI_MODEL_ENDPOINT =
+  process.env.OPENAI_MODEL_ENDPOINT ||
+  "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
 
 export class OpenAIRealTime extends VoiceAIAgentBaseClass {
-    async sendKeepAlive(): Promise<void> {
-        // Not Required for OpenAI Realtime API
-    }
-    
-    private openAiWs: WebSocket;
+  private openAiWs: WebSocket;
 
-    constructor(session: Session) {
-        super(session, () => {
-            console.log(new Date().toISOString() + ':' + '[OpenAI] NoInputTimer: Timeout reached');
-            const noInputConversationItem = {
-                type: 'conversation.item.create',
-                item: {
-                    type: 'message',
-                    role: 'user',
-                    content: [{
-                        type: 'input_text',
-                        text: process.env.NO_INPUT_MESSAGE || 'User did not provide any input. Act accordingly.'
-                    }]
-                }
-            };
-            this.openAiWs.send(JSON.stringify(noInputConversationItem));
-            this.openAiWs.send(JSON.stringify({ type: 'response.create' }));
-        }, getNoInputTimeout());
+  async sendKeepAlive(): Promise<void> {}
 
-        console.log(new Date().toISOString() + ':' + '[OpenAI] CONNECTING TO:', OPENAI_MODEL_ENDPOINT);
-        
-        // Авторизація без OpenAI-Beta заголовока (GA версія)
-        this.openAiWs = new WebSocket(OPENAI_MODEL_ENDPOINT, {
-            headers: {
-                Authorization: `Bearer ${OPENAI_API_KEY}`
-            }
-        });
+  constructor(session: Session) {
+    super(
+      session,
+      () => {
+        console.log(
+          `[${new Date().toISOString()}] 🕒 [NoInput] Таймаут! Користувач мовчить.`,
+        );
+      },
+      getNoInputTimeout(),
+    );
 
-        const initializeSession = () => {
-            const sessionUpdate = {
-                type: 'session.update',
-                session: {
-                    type: "realtime", // Новий обов'язковий параметр
-                    model: "gpt-4o-realtime-preview",
-                    audio: {
-                        input: { format: "g711_ulaw" },
-                        output: { 
-                            format: "g711_ulaw",
-                            voice: VOICE 
-                        }
-                    },
-                    turn_detection: {
-                        type: "server_vad",
-                        threshold: 0.5,
-                        prefix_padding_ms: 300,
-                        silence_duration_ms: 500,
-                        create_response: true,
-                        interrupt_response: true
-                    },
-                    instructions: this.getSystemMessage(),  
-                    tools: this.getSystemTools(), 
-                    tool_choice: "auto",
-                    modalities: ["text", "audio"],
-                    temperature: 0.8
-                }
-            };
+    console.log(
+      `[${new Date().toISOString()}] 🔌 [OpenAI] Спроба підключення до: ${OPENAI_MODEL_ENDPOINT}`,
+    );
 
-            console.log(new Date().toISOString() + ':[OpenAI] InitializeSession (GA Update)');
-            this.openAiWs.send(JSON.stringify(sessionUpdate));
-            sendInitialConversationItem();
-        };
+    // 1. СПОЧАТКУ СТВОРЮЄМО
+    this.openAiWs = new WebSocket(OPENAI_MODEL_ENDPOINT, {
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+    });
 
-        const sendInitialConversationItem = () => {
-            const initialConversationItem = {
-                type: 'conversation.item.create',
-                item: {
-                    type: 'message',
-                    role: 'user',
-                    content: [{
-                        type: 'input_text',
-                        text: INITIAL_GREETING
-                    }]
-                }
-            };
-            this.openAiWs.send(JSON.stringify(initialConversationItem));
-            this.openAiWs.send(JSON.stringify({ type: 'response.create' }));
-        };
+    // 2. ПОТІМ ПРИЗНАЧАЄМО ОБРОБНИКИ
+    this.openAiWs.on("open", () => {
+      console.log(
+        `[${new Date().toISOString()}] ✅ [OpenAI] З'єднання встановлено!`,
+      );
 
-        this.openAiWs.on('open', () => {
-            console.log(new Date().toISOString() + ':[OpenAI] Connected to the OpenAI Realtime API');
-            setTimeout(initializeSession, 100);
-        });
+      const event = {
+        type: "session.update",
+        session: {
+          type: "realtime",
+          instructions:
+            "Ти помічник ДТЕК. Спілкуйся виключно українською мовою.",
+          audio: {
+            input: {
+              format: {
+                type: "audio/pcmu",
+              },
+            },
+            output: {
+              format: {
+                type: "audio/pcmu",
+              },
+              voice: "alloy",
+            },
+          },
+        },
+      };
 
-        this.openAiWs.on('message', (data: string) => {
-            try {
-                const response = JSON.parse(data);
-                
-                if (LOG_EVENT_TYPES.includes(response.type)) {
-                    console.log(new Date().toISOString() + ':' + `[OpenAI] Event: ${response.type}`);
-                }
+      console.log(
+        `[${new Date().toISOString()}] 📝 [OpenAI] Надсилаю конфігурацію...`,
+      );
+      this.openAiWs.send(JSON.stringify(event));
+    });
 
-                // Обробка аудіо-дельти (GA назва події)
-                if ((response.type === 'response.audio.delta' || response.type === 'response.output_audio.delta') && response.delta) {
-                    this.session.sendAudio(new Uint8Array(Buffer.from(response.delta, 'base64')));
-                }
+    this.openAiWs.on("message", (data: string) => {
+      try {
+        const response = JSON.parse(data);
 
-                if (response.type === 'response.done') {
-                    if (response.response.status === 'completed') {
-                        this.session.flushBuffer();
-                        
-                        response.response.output.filter((out: any) => out.type === 'function_call').forEach((func_call: any) => {
-                            const args = JSON.parse(func_call.arguments);
-                            console.log(new Date().toISOString() + ':' + `[OpenAI] FunctionCall: ${func_call.name}`);
-
-                            const responseData: any = {
-                                type: "conversation.item.create",
-                                item: {
-                                    type: "function_call_output",
-                                    call_id: func_call.call_id,
-                                    output: ''
-                                }
-                            };
-
-                            // ЛОГІКА ДЛЯ ДТЕК
-                            if (func_call.name === "submitMeterReading") {
-                                console.log('-----------------------------------------');
-                                console.log('📊 DTEK METER DATA RECEIVED:');
-                                console.log(`🏠 Address: ${args.fullAddress}`);
-                                console.log(`🔌 Value: ${args.readingValue}`);
-                                console.log('-----------------------------------------');
-                                responseData.item.output = JSON.stringify({ status: "success", info: "recorded" });
-                            
-                            } else if (func_call.name === "transferToAgent") {
-                                responseData.item.output = JSON.stringify({ status: "ok" });
-                                session.sendDisconnect('completed', args.process, {});
-                            
-                            } else if (func_call.name === "endCall") {
-                                session.sendDisconnect('completed', 'EndCall', {});
-                            }
-
-                            this.openAiWs.send(JSON.stringify(responseData));
-                            this.openAiWs.send(JSON.stringify({ type: 'response.create' }));
-                        });
-                    }
-                }
-
-                if (response.type === 'input_audio_buffer.speech_started') {
-                    this.noInputTimer.haltTimer();
-                    this.session.sendBargeIn();
-                }
-
-                if (response.type === 'input_audio_buffer.speech_stopped') {
-                    this.noInputTimer.resumeTimer();
-                }
-
-                if (response.type === 'error') {
-                    console.error(new Date().toISOString() + ':[OpenAI] API Error:', JSON.stringify(response.error));
-                }
-
-            } catch (error) {
-                console.error(new Date().toISOString() + ':[OpenAI] Processing Error:', error);
-            }
-        });
-    }
-
-    protected isAgentConnected(): boolean {
-        return this.openAiWs && this.openAiWs.readyState === WebSocket.OPEN;
-    }
-
-    async processAudio(audioPayload: Uint8Array): Promise<void> {
-        if (this.isAgentConnected()) {
-            this.openAiWs.send(JSON.stringify({
-                type: 'input_audio_buffer.append',
-                audio: Buffer.from(audioPayload).toString('base64')
-            }));
+        // 1. Ловимо звук (дельти)
+        if (response.type === "response.output_audio.delta") {
+          if (response.delta) {
+            // Конвертуємо Base64 назад у бінарні дані та шлемо в Genesys
+            const audioBuffer = Buffer.from(response.delta, "base64");
+            this.session.sendAudio(new Uint8Array(audioBuffer));
+          }
         }
-    }
 
-    async processPlaybackCompleted(): Promise<void> {
-        if (this.isAgentConnected()) {
-            this.noInputTimer.startTimer();
+        // 2. Ловимо текст для консолі (щоб бачити, що каже бот)
+        if (response.type === "response.output_audio_transcript.delta") {
+          // Можна додавати в один рядок для красивого виводу
+          process.stdout.write(response.delta);
         }
-    }
 
-    cancelResponse() {
-        if (this.isAgentConnected()) {
-            this.openAiWs.send(JSON.stringify({ type: 'response.cancel' }));
+        // 3. Завершення відповіді
+        if (response.type === "response.output_audio_transcript.done") {
+          console.log(
+            `\n[${new Date().toISOString()}] 🤖 AI DONE: ${response.transcript}`,
+          );
         }
-    }
 
-    async close(): Promise<void> {
-        if (this.isAgentConnected()) {
-            this.openAiWs.close();
+        if (response.type === "error") {
+          console.error("❌ OpenAI API Error:", response.error);
         }
+      } catch (e) {
+        console.error("❌ Помилка обробки повідомлення OpenAI:", e);
+      }
+    });
+  }
+
+  async processAudio(audioPayload: Uint8Array): Promise<void> {
+    if (this.isAgentConnected()) {
+      this.openAiWs.send(
+        JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: Buffer.from(audioPayload).toString("base64"),
+        }),
+      );
     }
+  }
+
+  protected isAgentConnected(): boolean {
+    return this.openAiWs && this.openAiWs.readyState === WebSocket.OPEN;
+  }
+
+  // Метод для зупинки поточної відповіді ШІ (наприклад, якщо клієнт перебив бота)
+  cancelResponse() {
+    if (this.isAgentConnected()) {
+      console.log(
+        `[${new Date().toISOString()}] 🛑 [OpenAI] Скасування відповіді (Barge-in)`,
+      );
+      this.openAiWs.send(JSON.stringify({ type: "response.cancel" }));
+    }
+  }
+
+  // Метод для повного закриття з'єднання
+  async close(): Promise<void> {
+    if (this.openAiWs) {
+      console.log(
+        `[${new Date().toISOString()}] 🔌 [OpenAI] Закриття WebSocket з'єднання.`,
+      );
+      this.openAiWs.close();
+    }
+  }
 }

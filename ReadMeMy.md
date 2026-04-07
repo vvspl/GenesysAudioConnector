@@ -5,6 +5,7 @@ docker network prune -f
 
 Build new container:
 docker build -f Dockerfile.proxy -t audio-connector-tunnel .
+(docker build -t audio-connector-tunnel .)
 
 Run new container:
 docker run --dns 8.8.8.8 --env-file .env -p 8081:8081 audio-connector-tunnel
