@@ -1,0 +1,36 @@
+# ---------- Stage 1: Build ----------
+FROM node:18-alpine3.20 AS builder
+
+WORKDIR /app
+
+# Copy and install only production dependencies
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+# ---------- Stage 2: Runtime ----------
+FROM node:18-alpine3.20
+
+WORKDIR /app
+
+# Create a non-root user
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Install curl and verify ngrok
+RUN apk add --no-cache curl tar \
+    && curl -sSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -o ngrok.tgz \
+    && tar -xzf ngrok.tgz -C /usr/local/bin \
+    && rm ngrok.tgz
+
+# Copy only necessary files
+COPY --from=builder /app/node_modules ./node_modules
+COPY . .
+
+# Set permissions and make scripts executable
+RUN chmod +x /app/start.sh && chown -R appuser:appgroup /app
+
+# Switch to non-root user
+USER appuser
+
+EXPOSE 8081
+
+CMD ["sh", "start.sh"]

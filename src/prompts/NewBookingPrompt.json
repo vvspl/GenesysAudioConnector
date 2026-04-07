@@ -1,0 +1,163 @@
+[
+  {
+    "type": "function",
+    "name": "searchFlightLeg",
+    "description": "Search for flight itineraries based on origin, destination, date, passengers, and cabin class.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "type": "string",
+          "description": "IATA code of the departure airport."
+        },
+        "destination": {
+          "type": "string",
+          "description": "IATA code of the arrival airport."
+        },
+        "depart": {
+          "type": "string",
+          "format": "date",
+          "description": "Outbound flight date in YYYY-MM-DD format."
+        },
+        "pax": {
+          "type": "object",
+          "description": "Number of passengers by category.",
+          "properties": {
+            "adults": { "type": "integer" },
+            "children": { "type": "integer" },
+            "infants": { "type": "integer" }
+          },
+          "required": ["adults", "children", "infants"]
+        },
+        "cabin": {
+          "type": "string",
+          "description": "Cabin class (e.g., economy, business, first).",
+          "enum": [
+            "economy",
+            "premium_economy",
+            "business",
+            "first"
+          ]
+        },
+        "ancillaries": {
+          "type": "array",
+          "description": "Optional ancillaries",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["origin", "destination", "depart", "pax", "cabin"]
+    }
+  },
+  {
+    "type": "function",
+    "name": "createItinerary",
+    "description": "Generates a 6-char alphanumeric PNR and sends a WhatsApp link with the itinerary details.",
+    "parameters": {
+      "type": "object",
+      "required": ["itineraries", "phoneNumber"],
+      "properties": {
+        "itineraries": {
+          "type": "array",
+          "description": "One or more confirmed itinerary segments",
+          "items": {
+            "type": "object",
+            "required": [
+              "flightNo",
+              "origin",
+              "destination",
+              "departDate",
+              "departTime",
+              "arriveTime",
+              "cabin",
+              "pax",
+              "summary",
+              "price",
+              "currency"
+            ],
+            "properties": {
+              "flightNo": { "type": "string", "description": "Flight number" },
+              "origin": { "type": "string", "description": "Departure IATA code" },
+              "destination": { "type": "string", "description": "Arrival IATA code" },
+              "departDate": {
+                "type": "string",
+                "format": "date",
+                "description": "YYYY-MM-DD"
+              },
+              "departTime": {
+                "type": "string",
+                "pattern": "^([0-1]\\d|2[0-3]):([0-5]\\d)$",
+                "description": "HH:mm"
+              },
+              "arriveTime": {
+                "type": "string",
+                "pattern": "^([0-1]\\d|2[0-3]):([0-5]\\d)$",
+                "description": "HH:mm"
+              },
+              "cabin": { "type": "string", "description": "Cabin class" },
+              "ancillaries": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Optional ancillaries"
+              },
+              "pax": {
+                "type": "object",
+                "required": ["adults", "children", "infants"],
+                "properties": {
+                  "adults": { "type": "integer", "minimum": 1 },
+                  "children": { "type": "integer", "minimum": 0 },
+                  "infants": { "type": "integer", "minimum": 0 }
+                }
+              },
+              "summary": {
+                "type": "string",
+                "description": "Text summary of the itinerary"
+              },
+              "price": { "type": "number", "description": "Total price" },
+              "currency": {
+                "type": "string",
+                "description": "ISO currency code (e.g., SAR, USD)"
+              }
+            }
+          }
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "Customer's E.164-formatted phone number for WhatsApp"
+        }
+      }
+    }
+  },
+  {
+    "name": "endCall",
+    "type": "function",
+    "description": "Terminate the Call with the customer after the customer has confirmed they dont need any further assistance."
+  },
+  {
+    "type": "function",
+    "name": "transferToAgent",
+    "description": "Trigger a hand-off to a live agent, providing contextual slots and the reason for transfer.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "slots": {
+          "type": "array",
+          "description": "List of slot name/value pairs to pass to the agent.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "description": "Slot name." },
+              "value": { "type": "string", "description": "Slot value." }
+            },
+            "required": ["name", "value"]
+          }
+        },
+        "process": {
+          "type": "string",
+          "description": "The request type prompting the transfer.",
+          "enum": ["NewBooking", "ExistingBooking", "Refund", "LoyaltyProgram", "OtherRequest"]
+        }
+      },
+      "required": ["slots", "process"]
+    }
+  }
+]
