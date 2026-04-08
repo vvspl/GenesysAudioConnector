@@ -53,11 +53,31 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
           type: "session.update",
           session: {
             type: "realtime",
-            instructions:
-              "Ти помічник ДТЕК. Спілкуйся виключно українською мовою. Якщо клієнт хоче завершити розмову — виклич функцію end_conversation.",
+            instructions: `
+Ти помічник ДТЕК.
+
+ВАЖЛИВО:
+- Клієнт може говорити українською, російською або змішаною мовою.
+- Завжди інтерпретуй сказане як українську.
+- Нормалізуй слова до української мови.
+- Якщо адреса сказана різними мовами — об'єднуй її в одну українську адресу.
+- Числа розпізнавай навіть якщо вони сказані іншою мовою.
+
+Спілкуйся виключно українською.
+Якщо клієнт хоче завершити розмову — виклич end_conversation.
+`,
             audio: {
-              input: { format: { type: "audio/pcmu" } },
-              output: { format: { type: "audio/pcmu" }, voice: "alloy" },
+              input: {
+                format: { type: "audio/pcmu" },
+                transcription: {
+                  model: "gpt-4o-mini-transcribe",
+                  language: "uk",
+                },
+              },
+              output: {
+                format: { type: "audio/pcmu" },
+                voice: "alloy",
+              },
             },
             tools: [
               {
