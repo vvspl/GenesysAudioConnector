@@ -6,6 +6,9 @@ import { Session } from "../websocket/session";
 import { VoiceAIAgentBaseClass } from "./voice-aiagent-base";
 import { getNoInputTimeout } from "../common/environment-variables";
 
+import * as fs from "fs";
+import * as path from "path";
+
 let { OPENAI_API_KEY } = process.env;
 const OPENAI_MODEL_ENDPOINT =
   process.env.OPENAI_MODEL_ENDPOINT ||
@@ -91,7 +94,6 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
             tool_choice: "auto",
           },
         };
-
         console.log(
           `[${new Date().toISOString()}] 📝 [OpenAI] Надсилаю конфігурацію...`,
         );
@@ -101,7 +103,7 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
       }
     });
 
-    this.openAiWs.on("message", (data: any) => {
+    this.openAiWs.on("message", async (data: any) => {
       // 1. Конвертуємо Buffer у рядок, щоб JSON міг його прочитати
       const messageString = Buffer.isBuffer(data) ? data.toString() : data;
 
@@ -142,11 +144,11 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
           response.type ===
           "conversation.item.input_audio_transcription.completed"
         ) {
-          this.fullTranscript.push({
-            role: "user",
-            content: response.transcript,
-          });
-          console.log(`[User]: ${response.transcript}`);
+          const userText = response.transcript?.trim();
+          if (userText) {
+            this.fullTranscript.push({ role: "user", content: userText });
+            console.log(`[${new Date().toISOString()}] 👤 Клієнт: ${userText}`);
+          }
         }
 
         // 5. ЛОГІКА ЗАВЕРШЕННЯ СЕСІЇ
@@ -189,25 +191,20 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
 
             this.openAiWs.send(JSON.stringify({ type: "response.create" }));
           } else if (this.isClosing) {
-            console.log(
-              `[${new Date().toISOString()}] 🎤 Прощання завершено. Надсилаємо дані в Genesys...`,
-            );
-
-            // ВИПРАВЛЕННЯ ТУТ: використовуємо вже перевірений спосіб очищення таймера
             if (this.noInputTimer) {
               global.clearTimeout(this.noInputTimer as any);
               this.noInputTimer = null;
             }
 
-            // Формуємо історію діалогу
-            const chatHistory = this.fullTranscript
-              .map(
-                (t) => `${t.role === "user" ? "Клієнт" : "Бот"}: ${t.content}`,
-              )
-              .join("\n");
+            const conversationId =
+              (this.session as any).conversationId || "unknown";
+
+            // 1. Чекаємо на генерацію посилання
+            const transcriptUrl =
+              await this.saveTranscriptAndGetUrl(conversationId);
 
             try {
-              // Передаємо всі змінні окремо
+              // 2. Відправляємо посилання в Genesys Architect
               this.session.sendDisconnect(
                 "completed" as any,
                 "AI session finished",
@@ -217,12 +214,15 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
                   street: this.tempAddressData.street,
                   house: this.tempAddressData.house,
                   apartment: this.tempAddressData.apartment,
-                  conversation_history: chatHistory,
+                  // ТЕПЕР ТУТ БУДЕ ПОСИЛАННЯ
+                  conversation_history: transcriptUrl,
                 },
               );
-              console.log("✅ Всі дані успішно передані");
+              console.log(
+                `✅ Посилання на лог відправлено в Genesys: ${transcriptUrl}`,
+              );
             } catch (e) {
-              console.error("⚠️ Помилка передачі в Genesys:", e);
+              console.error("⚠️ Помилка передачі:", e);
             }
 
             setTimeout(() => this.session.close(), 1000);
@@ -240,6 +240,38 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
         console.error("❌ Помилка обробки повідомлення:", err);
       }
     });
+  }
+
+  // Метод для запису conversation в файл і формування посилання на нього
+  private async saveTranscriptAndGetUrl(
+    conversationId: string,
+  ): Promise<string> {
+    try {
+      // Шлях до папки (відносно файлу open-ai.ts)
+      const logDir = path.join(__dirname, "../../public/logs");
+
+      // Створюємо папку, якщо її немає
+      if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
+      }
+
+      const fileName = `${conversationId}.txt`;
+      const filePath = path.join(logDir, fileName);
+
+      const chatText = this.fullTranscript
+        .map((t) => `${t.role === "user" ? "Клієнт" : "Бот"}: ${t.content}`)
+        .join("\n");
+
+      // Записуємо повний текст у файл
+      fs.writeFileSync(filePath, chatText, "utf8");
+
+      // Формуємо посилання.
+      const baseUrl = process.env.NGROK_STATIC_URL;
+      return `${baseUrl}/logs/${fileName}`;
+    } catch (err) {
+      console.error("❌ Помилка збереження файлу:", err);
+      return "Помилка збереження логу";
+    }
   }
 
   async processAudio(audioPayload: Uint8Array): Promise<void> {
