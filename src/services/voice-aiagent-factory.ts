@@ -1,5 +1,4 @@
 import { VoiceAIAgentBaseClass } from "./voice-aiagent-base";
-import { DeepgramAIVoiceAgent } from "./deepgram";
 import { OpenAIRealTime } from "./open-ai"; // Adjust path if needed
 import { Session } from "../websocket/session";
 
