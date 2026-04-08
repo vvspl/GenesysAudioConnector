@@ -15,6 +15,8 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
   private openAiWs: WebSocket;
   private isClosing: boolean = false;
   private userAddress: string = "";
+  private tempAddressData: any = {};
+  private fullTranscript: { role: string; content: string }[] = [];
 
   async sendKeepAlive(): Promise<void> {}
 
@@ -58,16 +60,31 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
               {
                 type: "function",
                 name: "end_conversation",
-                description: "Завершити розмову та зберегти адресу клієнта.",
+                description: "Завершити розмову та зберегти всі дані клієнта.",
                 parameters: {
                   type: "object",
                   properties: {
-                    reason: { type: "string" },
-                    address: {
+                    full_address: {
                       type: "string",
-                      description: "Повна адреса, яку назвав клієнт",
+                      description: "Повна адреса одним рядком",
+                    },
+                    city: {
+                      type: "string",
+                      description:
+                        "Населений пункт: місто, село, селище, смт тощо.",
+                    },
+                    street: {
+                      type: "string",
+                      description:
+                        "Все, що не є населеним пунктом: вулиця, площа, провулок, мікрорайон, військове містечко, квартал тощо.",
+                    },
+                    house: { type: "string", description: "Номер будинку" },
+                    apartment: {
+                      type: "string",
+                      description: "Номер квартири",
                     },
                   },
+                  required: ["full_address", "city", "street", "house"],
                 },
               },
             ],
@@ -109,67 +126,28 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
 
         // 4. ТЕКСТОВА ТРАНСКРИПЦІЯ
         if (response.type === "response.output_audio_transcript.done") {
+          // Коли бот договорив фразу - додаємо її в запис діалогу
+          this.fullTranscript.push({
+            role: "assistant",
+            content: response.transcript,
+          });
           console.log(
             `[${new Date().toISOString()}] 🤖 AI: ${response.transcript}`,
           );
         }
 
-        // // 5. ЛОГІКА ЗАВЕРШЕННЯ СЕСІЇ
-        // if (response.type === "response.done") {
-        //   const output = response.response?.output || [];
-        //   const call = output.find(
-        //     (item: any) =>
-        //       item.type === "function_call" && item.name === "end_conversation",
-        //   );
-
-        //   if (call) {
-        //     console.log(
-        //       `[${new Date().toISOString()}] 🔚 Бот викликав функцію завершення розмови.`,
-        //     );
-        //     this.isClosing = true;
-
-        //     this.openAiWs.send(
-        //       JSON.stringify({
-        //         type: "conversation.item.create",
-        //         item: {
-        //           type: "function_call_output",
-        //           call_id: call.call_id,
-        //           output: JSON.stringify({ status: "success" }),
-        //         },
-        //       }),
-        //     );
-
-        //     this.openAiWs.send(JSON.stringify({ type: "response.create" }));
-        //   } else if (this.isClosing) {
-        //     console.log(
-        //       `[${new Date().toISOString()}] 🎤 Прощання завершено. Розриваємо потік і завершуємо Genesys...`,
-        //     );
-
-        //     // 1. Очищаємо таймер (global)
-        //     if (this.noInputTimer) {
-        //       global.clearTimeout(this.noInputTimer as any);
-        //       this.noInputTimer = null;
-        //     }
-
-        //     try {
-        //       // Використовуємо 'completed' замість 'session_completed'
-        //       // Це найбільш стандартне значення для успішного завершення
-        //       this.session.sendDisconnect(
-        //         "completed",
-        //         "AI agent finished the conversation",
-        //         {},
-        //       );
-        //       console.log("✅ Команда sendDisconnect ('completed') надіслана");
-        //     } catch (e) {
-        //       console.log("⚠️ Помилка при виклику sendDisconnect:", e);
-        //     }
-
-        //     // 3. Чекаємо трохи, щоб Genesys обробив роз'єднання, і закриваємо сокет
-        //     setTimeout(() => {
-        //       this.session.close();
-        //     }, 1000);
-        //   }
-        // }
+        // Коли клієнт закінчив фразу (OpenAI Realtime надсилає транскрипт користувача)
+        // додаємо фразу кліэнта в запис діалогу
+        if (
+          response.type ===
+          "conversation.item.input_audio_transcription.completed"
+        ) {
+          this.fullTranscript.push({
+            role: "user",
+            content: response.transcript,
+          });
+          console.log(`[User]: ${response.transcript}`);
+        }
 
         // 5. ЛОГІКА ЗАВЕРШЕННЯ СЕСІЇ
         if (response.type === "response.done") {
@@ -180,18 +158,24 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
           );
 
           if (call) {
-            // 1. Парсимо аргументи функції
             const args = JSON.parse(call.arguments || "{}");
-            if (args.address) {
-              this.userAddress = args.address; // Зберігаємо адресу
-              console.log(
-                `[${new Date().toISOString()}] 🏠 Отримана адреса: ${this.userAddress}`,
-              );
-            }
 
+            // Зберігаємо всі дані в об'єкт
+            this.tempAddressData = {
+              full_address: args.full_address || "",
+              city: args.city || "",
+              street: args.street || "",
+              house: args.house || "",
+              apartment: args.apartment || "",
+            };
+
+            console.log(
+              `[${new Date().toISOString()}] 🏠 Зібрано дані для Genesys:`,
+              this.tempAddressData,
+            );
             this.isClosing = true;
 
-            // Підтверджуємо OpenAI (стандартно)
+            // Підтверджуємо OpenAI виконання функції
             this.openAiWs.send(
               JSON.stringify({
                 type: "conversation.item.create",
@@ -206,30 +190,42 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
             this.openAiWs.send(JSON.stringify({ type: "response.create" }));
           } else if (this.isClosing) {
             console.log(
-              `[${new Date().toISOString()}] 🎤 Прощання завершено. Передаємо дані в Genesys...`,
+              `[${new Date().toISOString()}] 🎤 Прощання завершено. Надсилаємо дані в Genesys...`,
             );
 
+            // ВИПРАВЛЕННЯ ТУТ: використовуємо вже перевірений спосіб очищення таймера
             if (this.noInputTimer) {
               global.clearTimeout(this.noInputTimer as any);
               this.noInputTimer = null;
             }
 
+            // Формуємо історію діалогу
+            const chatHistory = this.fullTranscript
+              .map(
+                (t) => `${t.role === "user" ? "Клієнт" : "Бот"}: ${t.content}`,
+              )
+              .join("\n");
+
             try {
-              // 2. ПЕРЕДАЄМО АДРЕСУ В GENESYS
-              // Третій параметр у sendDisconnect — це об'єкт outputVariables
+              // Передаємо всі змінні окремо
               this.session.sendDisconnect(
                 "completed" as any,
-                "AI agent finished",
-                { client_address: this.userAddress }, // Ця змінна з'явиться в Architect
+                "AI session finished",
+                {
+                  full_address: this.tempAddressData.full_address,
+                  city: this.tempAddressData.city,
+                  street: this.tempAddressData.street,
+                  house: this.tempAddressData.house,
+                  apartment: this.tempAddressData.apartment,
+                  conversation_history: chatHistory,
+                },
               );
-              console.log("✅ Дані з адресою надіслані в Genesys");
+              console.log("✅ Всі дані успішно передані");
             } catch (e) {
-              console.log("⚠️ Помилка sendDisconnect:", e);
+              console.error("⚠️ Помилка передачі в Genesys:", e);
             }
 
-            setTimeout(() => {
-              this.session.close();
-            }, 1000);
+            setTimeout(() => this.session.close(), 1000);
           }
         }
 
