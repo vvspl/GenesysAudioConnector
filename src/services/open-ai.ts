@@ -5,6 +5,8 @@ import WebSocket from "ws";
 import { Session } from "../websocket/session";
 import { VoiceAIAgentBaseClass } from "./voice-aiagent-base";
 import { getNoInputTimeout } from "../common/environment-variables";
+import { DTEK_INSTRUCTIONS } from "../prompts/DTEK_Instructions";
+import { DTEK_TOOLS } from "../prompts/DTEK_Tools";
 
 import * as fs from "fs";
 import * as path from "path";
@@ -53,23 +55,7 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
           type: "session.update",
           session: {
             type: "realtime",
-            instructions: `
-Ти помічник ДТЕК. Твоя місія - приймати дзвінки абонентів які хочуть передати показник лічильника електроенергії за вказаною повною адресою.
-Тобі потрібно першим привітатися на початку діалогу і далі запитати чи бажає клієнт передати показники лічильника. Якщо так - запитати повну адресу.
-Після того як клієнт каже повну адресу - обов'язково перепитати чи вірно вказана адреса: повторити її клієнту. Якщо відповідь ствердна - в такому самому стилі запитати показник лічильника.
-Якщо клієнт каже що адреса не правильна - то уточнити її повторно.
-Якщо клієнт хоче будь що інше окрім передачі показань лічильника - запропонувати зателефонувати на гарячу лінію і ввічливо завершити сесію діалога (виклик end_conversation).
-
-ВАЖЛИВО:
-- Клієнт може говорити українською, російською або змішаною мовою.
-- Завжди інтерпретуй сказане як українську.
-- Нормалізуй слова до української мови.
-- Якщо адреса сказана різними мовами — об'єднуй її в одну українську адресу.
-- Числа розпізнавай навіть якщо вони сказані іншою мовою.
-
-Спілкуйся виключно українською.
-Якщо клієнт хоче завершити розмову — виклич end_conversation.
-`,
+            instructions: DTEK_INSTRUCTIONS,
             audio: {
               input: {
                 format: { type: "audio/pcmu" },
@@ -83,38 +69,7 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
                 voice: "alloy",
               },
             },
-            tools: [
-              {
-                type: "function",
-                name: "end_conversation",
-                description: "Завершити розмову та зберегти всі дані клієнта.",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    full_address: {
-                      type: "string",
-                      description: "Повна адреса одним рядком",
-                    },
-                    city: {
-                      type: "string",
-                      description:
-                        "Населений пункт: місто, село, селище, смт тощо.",
-                    },
-                    street: {
-                      type: "string",
-                      description:
-                        "Все, що не є населеним пунктом: вулиця, площа, провулок, мікрорайон, військове містечко, квартал тощо.",
-                    },
-                    house: { type: "string", description: "Номер будинку" },
-                    apartment: {
-                      type: "string",
-                      description: "Номер квартири",
-                    },
-                  },
-                  required: ["full_address", "city", "street", "house"],
-                },
-              },
-            ],
+            tools: DTEK_TOOLS,
             tool_choice: "auto",
           },
         };
