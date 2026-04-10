@@ -16,6 +16,60 @@ const OPENAI_MODEL_ENDPOINT =
   process.env.OPENAI_MODEL_ENDPOINT ||
   "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
 
+// 🔥 NEW — MENU INSTRUCTIONS
+const MENU_INSTRUCTIONS = `
+Ти голосове меню компанії ДТЕК.
+
+Визнач намір клієнта:
+- meter — передати показники
+- outage — відключення
+- weather — погода
+
+ПРАВИЛА:
+- Привітайся
+- Після першої фрази визнач намір
+- НЕ пояснюй меню
+- Одразу виклич switch_agent
+- Якщо не зрозумів — уточни
+
+Ти тільки маршрутизатор.
+`;
+
+// 🔥 NEW — MENU TOOLS
+const MENU_TOOLS = [
+  {
+    type: "function",
+    name: "switch_agent",
+    description: "Switch dialog to another agent",
+    parameters: {
+      type: "object",
+      properties: {
+        agent: {
+          type: "string",
+          enum: ["meter", "outage", "weather"],
+        },
+      },
+      required: ["agent"],
+    },
+  },
+];
+
+// 🔥 NEW — AGENT REGISTRY
+const AGENTS: any = {
+  meter: {
+    instructions: DTEK_INSTRUCTIONS,
+    tools: DTEK_TOOLS,
+  },
+  outage: {
+    instructions: "Outage agent (TODO)",
+    tools: [],
+  },
+  weather: {
+    instructions: "Weather agent (TODO)",
+    tools: [],
+  },
+};
+
 export class OpenAIRealTime extends VoiceAIAgentBaseClass {
   private openAiWs: WebSocket;
   private isClosing: boolean = false;
@@ -23,7 +77,7 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
   private tempAddressData: any = {};
   private fullTranscript: { role: string; content: string }[] = [];
 
-  async sendKeepAlive(): Promise<void> {}
+  async sendKeepAlive(): Promise<void> {} // ✅ ПОВЕРНУЛИ
 
   constructor(session: Session) {
     super(
@@ -40,7 +94,6 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
       `[${new Date().toISOString()}] 🔌 [OpenAI] Спроба підключення до: ${OPENAI_MODEL_ENDPOINT}`,
     );
 
-    // 1. СПОЧАТКУ СТВОРЮЄМО
     this.openAiWs = new WebSocket(OPENAI_MODEL_ENDPOINT, {
       headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
     });
@@ -50,75 +103,68 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
         `[${new Date().toISOString()}] ✅ [OpenAI] З'єднання встановлено!`,
       );
 
-      try {
-        const event = {
-          type: "session.update",
-          session: {
-            type: "realtime",
-            instructions: DTEK_INSTRUCTIONS,
-            audio: {
-              input: {
-                format: { type: "audio/pcmu" },
-                transcription: {
-                  model: "gpt-4o-mini-transcribe",
-                  language: "uk",
-                },
-              },
-              output: {
-                format: { type: "audio/pcmu" },
-                voice: "alloy",
+      // ⚠️ CHANGED — СТАРТУЄМО З MENU
+      const event = {
+        type: "session.update",
+        session: {
+          type: "realtime",
+          instructions: MENU_INSTRUCTIONS, // 🔥 було DTEK_INSTRUCTIONS
+          audio: {
+            input: {
+              format: { type: "audio/pcmu" },
+              transcription: {
+                model: "gpt-4o-mini-transcribe",
+                language: "uk",
               },
             },
-            tools: DTEK_TOOLS,
-            tool_choice: "auto",
+            output: {
+              format: { type: "audio/pcmu" },
+              voice: "alloy",
+            },
           },
-        };
-        console.log(
-          `[${new Date().toISOString()}] 📝 [OpenAI] Надсилаю конфігурацію...`,
-        );
-        this.openAiWs.send(JSON.stringify(event));
-      } catch (err) {
-        console.error("❌ Помилка при формуванні JSON:", err);
-      }
+          tools: MENU_TOOLS, // 🔥 було DTEK_TOOLS
+          tool_choice: "auto",
+        },
+      };
+
+      // НАЛАШТУВАННЯ СЕСІЇ
+      this.openAiWs.send(JSON.stringify(event));
+
+      // 🔥 СКАЗАТИ БОТУ "ПОЧИНАЙ ГОВОРИТИ"
+      this.openAiWs.send(
+        JSON.stringify({
+          type: "response.create",
+        }),
+      );
     });
 
     this.openAiWs.on("message", async (data: any) => {
-      // 1. Конвертуємо Buffer у рядок, щоб JSON міг його прочитати
       const messageString = Buffer.isBuffer(data) ? data.toString() : data;
-
-      // Якщо хочеш бачити чистий текст у логах, розкоментуй наступний рядок:
-      // console.log("RAW MESSAGE (TEXT):", messageString);
 
       try {
         const response = JSON.parse(messageString);
 
-        // 2. ОБРОБКА ЗВУКУ (Аудіо-дельти)
+        // AUDIO
         if (response.type === "response.output_audio.delta" && response.delta) {
           this.session.sendAudio(Buffer.from(response.delta, "base64"));
           return;
         }
 
-        // 3. ПІДТВЕРДЖЕННЯ СЕСІЇ (той самий session.updated, про який я казав)
+        // SESSION OK
         if (response.type === "session.updated") {
-          console.log(
-            `[${new Date().toISOString()}] ✨ [OpenAI] Сесію успішно оновлено!`,
-          );
+          console.log("✨ session updated");
         }
 
-        // 4. ТЕКСТОВА ТРАНСКРИПЦІЯ
+        // BOT TEXT
         if (response.type === "response.output_audio_transcript.done") {
-          // Коли бот договорив фразу - додаємо її в запис діалогу
           this.fullTranscript.push({
             role: "assistant",
             content: response.transcript,
           });
-          console.log(
-            `[${new Date().toISOString()}] 🤖 AI: ${response.transcript}`,
-          );
+          console.log("🤖 AI:", response.transcript);
         }
 
-        // Коли клієнт закінчив фразу (OpenAI Realtime надсилає транскрипт користувача)
-        // додаємо фразу кліэнта в запис діалогу
+        // USER TEXT
         if (
           response.type ===
           "conversation.item.input_audio_transcription.completed"
@@ -126,13 +172,75 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
           const userText = response.transcript?.trim();
           if (userText) {
             this.fullTranscript.push({ role: "user", content: userText });
-            console.log(`[${new Date().toISOString()}] 👤 Клієнт: ${userText}`);
+            console.log("👤 Клієнт:", userText);
           }
         }
 
-        // 5. ЛОГІКА ЗАВЕРШЕННЯ СЕСІЇ
+        // =============================
+        // 🔥 ОСНОВНА ЛОГІКА
+        // =============================
         if (response.type === "response.done") {
           const output = response.response?.output || [];
+
+          // 🔥 NEW — SWITCH AGENT
+          const switchCall = output.find(
+            (item: any) =>
+              item.type === "function_call" && item.name === "switch_agent",
+          );
+
+          // 👉 ВСТАВЛЯЄТЬСЯ ПЕРЕД end_conversation
+          if (switchCall) {
+            const args = JSON.parse(switchCall.arguments || "{}");
+            const agentName = args.agent;
+
+            console.log(`🔀 Switching to agent: ${agentName}`);
+
+            const agent = AGENTS[agentName];
+            if (!agent) return;
+
+            // підтвердження tool call
+            this.openAiWs.send(
+              JSON.stringify({
+                type: "conversation.item.create",
+                item: {
+                  type: "function_call_output",
+                  call_id: switchCall.call_id,
+                  output: JSON.stringify({ status: "ok" }),
+                },
+              }),
+            );
+
+            // 🔥 SWITCH
+            this.openAiWs.send(
+              JSON.stringify({
+                type: "session.update",
+                session: {
+                  type: "realtime", // 🔥 FIX
+                  instructions: agent.instructions,
+                  tools: agent.tools,
+                  tool_choice: "auto",
+                  audio: {
+                    input: {
+                      format: { type: "audio/pcmu" },
+                      transcription: {
+                        model: "gpt-4o-mini-transcribe",
+                        language: "uk",
+                      },
+                    },
+                    output: {
+                      format: { type: "audio/pcmu" },
+                      voice: "alloy",
+                    },
+                  },
+                },
+              }),
+            );
+
+            this.openAiWs.send(JSON.stringify({ type: "response.create" }));
+
+            return;
+          }
+
           const call = output.find(
             (item: any) =>
               item.type === "function_call" && item.name === "end_conversation",
@@ -141,7 +249,6 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
           if (call) {
             const args = JSON.parse(call.arguments || "{}");
 
-            // Зберігаємо всі дані в об'єкт
             this.tempAddressData = {
               full_address: args.full_address || "",
               city: args.city || "",
@@ -150,13 +257,8 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
               apartment: args.apartment || "",
             };
 
-            console.log(
-              `[${new Date().toISOString()}] 🏠 Зібрано дані для Genesys:`,
-              this.tempAddressData,
-            );
-            this.isClosing = true;
+            console.log("🏠 Дані:", this.tempAddressData);
 
-            // Підтверджуємо OpenAI виконання функції
             this.openAiWs.send(
               JSON.stringify({
                 type: "conversation.item.create",
@@ -168,89 +270,43 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
               }),
             );
 
-            this.openAiWs.send(JSON.stringify({ type: "response.create" }));
-          } else if (this.isClosing) {
-            if (this.noInputTimer) {
-              global.clearTimeout(this.noInputTimer as any);
-              this.noInputTimer = null;
-            }
-
             const conversationId =
               (this.session as any).conversationId || "unknown";
 
-            // 1. Чекаємо на генерацію посилання
-            const transcriptUrl =
-              await this.saveTranscriptAndGetUrl(conversationId);
+            this.saveTranscriptAndGetUrl(conversationId).then(
+              (transcriptUrl) => {
+                this.session.sendDisconnect(
+                  "completed" as any,
+                  "AI session finished",
+                  {
+                    full_address: this.tempAddressData.full_address,
+                    city: this.tempAddressData.city,
+                    street: this.tempAddressData.street,
+                    house: this.tempAddressData.house,
+                    apartment: this.tempAddressData.apartment,
+                    conversation_history: transcriptUrl,
+                  },
+                );
 
-            try {
-              // 2. Відправляємо посилання в Genesys Architect
-              this.session.sendDisconnect(
-                "completed" as any,
-                "AI session finished",
-                {
-                  full_address: this.tempAddressData.full_address,
-                  city: this.tempAddressData.city,
-                  street: this.tempAddressData.street,
-                  house: this.tempAddressData.house,
-                  apartment: this.tempAddressData.apartment,
-                  // ТЕПЕР ТУТ БУДЕ ПОСИЛАННЯ
-                  conversation_history: transcriptUrl,
-                },
-              );
-              console.log(
-                `✅ Посилання на лог відправлено в Genesys: ${transcriptUrl}`,
-              );
-            } catch (e) {
-              console.error("⚠️ Помилка передачі:", e);
-            }
+                setTimeout(() => this.session.close(), 500);
+              },
+            );
 
-            setTimeout(() => this.session.close(), 1000);
+            return;
           }
         }
 
-        // 6. ПЕРЕВІРКА ПОМИЛОК
         if (response.type === "error") {
-          console.error(
-            "❌ OpenAI Error:",
-            JSON.stringify(response.error, null, 2),
-          );
+          console.error("❌ OpenAI Error:", response.error);
         }
       } catch (err) {
-        console.error("❌ Помилка обробки повідомлення:", err);
+        console.error("❌ Parse error:", err);
       }
     });
   }
 
-  // Метод для запису conversation в файл і формування посилання на нього
-  private async saveTranscriptAndGetUrl(
-    conversationId: string,
-  ): Promise<string> {
-    try {
-      // Шлях до папки (відносно файлу open-ai.ts)
-      const logDir = path.join(__dirname, "../../public/logs");
-
-      // Створюємо папку, якщо її немає
-      if (!fs.existsSync(logDir)) {
-        fs.mkdirSync(logDir, { recursive: true });
-      }
-
-      const fileName = `${conversationId}.txt`;
-      const filePath = path.join(logDir, fileName);
-
-      const chatText = this.fullTranscript
-        .map((t) => `${t.role === "user" ? "Клієнт" : "Бот"}: ${t.content}`)
-        .join("\n");
-
-      // Записуємо повний текст у файл
-      fs.writeFileSync(filePath, chatText, "utf8");
-
-      // Формуємо посилання.
-      const baseUrl = process.env.NGROK_STATIC_URL;
-      return `${baseUrl}/logs/${fileName}`;
-    } catch (err) {
-      console.error("❌ Помилка збереження файлу:", err);
-      return "Помилка збереження логу";
-    }
+  protected isAgentConnected(): boolean {
+    return this.openAiWs && this.openAiWs.readyState === WebSocket.OPEN;
   }
 
   async processAudio(audioPayload: Uint8Array): Promise<void> {
@@ -264,27 +320,37 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
     }
   }
 
-  protected isAgentConnected(): boolean {
-    return this.openAiWs && this.openAiWs.readyState === WebSocket.OPEN;
-  }
-
-  // Метод для зупинки поточної відповіді ШІ (наприклад, якщо клієнт перебив бота)
   cancelResponse() {
     if (this.isAgentConnected()) {
-      console.log(
-        `[${new Date().toISOString()}] 🛑 [OpenAI] Скасування відповіді (Barge-in)`,
-      );
       this.openAiWs.send(JSON.stringify({ type: "response.cancel" }));
     }
   }
 
-  // Метод для повного закриття з'єднання
   async close(): Promise<void> {
     if (this.openAiWs) {
-      console.log(
-        `[${new Date().toISOString()}] 🔌 [OpenAI] Закриття WebSocket з'єднання.`,
-      );
       this.openAiWs.close();
     }
+  }
+
+  private async saveTranscriptAndGetUrl(
+    conversationId: string,
+  ): Promise<string> {
+    const logDir = path.join(__dirname, "../../public/logs");
+
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+
+    const fileName = `${conversationId}.txt`;
+    const filePath = path.join(logDir, fileName);
+
+    const chatText = this.fullTranscript
+      .map((t) => `${t.role === "user" ? "Клієнт" : "Бот"}: ${t.content}`)
+      .join("\n");
+
+    fs.writeFileSync(filePath, chatText, "utf8");
+
+    const baseUrl = process.env.NGROK_STATIC_URL;
+    return `${baseUrl}/logs/${fileName}`;
   }
 }
