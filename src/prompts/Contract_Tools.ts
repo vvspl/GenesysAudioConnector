@@ -1,4 +1,4 @@
-export const MENU_TOOLS = [
+export const CONTRACT_TOOLS = [
   {
     type: "function",
     name: "switch_agent",
@@ -23,7 +23,7 @@ export const MENU_TOOLS = [
       properties: {
         reason: {
           type: "string",
-          enum: ["completed", "operator"], // аргумент при завершенні діалогу
+          enum: ["copmpleted", "operator"],
         },
       },
     },

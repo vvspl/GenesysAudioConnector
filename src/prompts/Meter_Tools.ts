@@ -1,4 +1,4 @@
-export const DTEK_TOOLS = [
+export const METER_TOOLS = [
   {
     type: "function",
     name: "end_conversation",
@@ -26,39 +26,12 @@ export const DTEK_TOOLS = [
           type: "string",
           description: "Номер квартири",
         },
+        reason: {
+          type: "string",
+          enum: ["completed", "operator"], // аргумент при завершенні діалогу
+        },
       },
       required: ["full_address", "city", "street", "house"],
-    },
-  },
-  {
-    type: "function",
-    name: "transferToAgent",
-    description:
-      "Переключити дзвінок на оператора, якщо виникла проблема або прямий запит клієнта.",
-    parameters: {
-      type: "object",
-      properties: {
-        slots: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              name: { type: "string" },
-              value: { type: "string" },
-            },
-          },
-        },
-        process: {
-          type: "string",
-          enum: [
-            "MeterReading",
-            "AddressIssue",
-            "TechnicalError",
-            "OtherRequest",
-          ],
-        },
-      },
-      required: ["process"],
     },
   },
 ];

@@ -5,79 +5,22 @@ import WebSocket from "ws";
 import { Session } from "../websocket/session";
 import { VoiceAIAgentBaseClass } from "./voice-aiagent-base";
 import { getNoInputTimeout } from "../common/environment-variables";
-import { DTEK_INSTRUCTIONS } from "../prompts/DTEK_Instructions";
-import { DTEK_TOOLS } from "../prompts/DTEK_Tools";
+import { MENU_INSTRUCTIONS } from "../prompts/Menu_Instructions";
+import { MENU_TOOLS } from "../prompts/Menu_Tools";
+import { AGENTS } from "../agents/agent-registry";
 
 import * as fs from "fs";
 import * as path from "path";
 
-let { OPENAI_API_KEY } = process.env;
-const OPENAI_MODEL_ENDPOINT =
-  process.env.OPENAI_MODEL_ENDPOINT ||
-  "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
-
-// 🔥 NEW — MENU INSTRUCTIONS
-const MENU_INSTRUCTIONS = `
-Ти голосове меню компанії ДТЕК.
-
-Визнач намір клієнта:
-- meter — передати показники
-- outage — відключення
-- weather — погода
-
-ПРАВИЛА:
-- Привітайся
-- Після першої фрази визнач намір
-- НЕ пояснюй меню
-- Одразу виклич switch_agent
-- Якщо не зрозумів — уточни
-
-Ти тільки маршрутизатор.
-`;
-
-// 🔥 NEW — MENU TOOLS
-const MENU_TOOLS = [
-  {
-    type: "function",
-    name: "switch_agent",
-    description: "Switch dialog to another agent",
-    parameters: {
-      type: "object",
-      properties: {
-        agent: {
-          type: "string",
-          enum: ["meter", "outage", "weather"],
-        },
-      },
-      required: ["agent"],
-    },
-  },
-];
-
-// 🔥 NEW — AGENT REGISTRY
-const AGENTS: any = {
-  meter: {
-    instructions: DTEK_INSTRUCTIONS,
-    tools: DTEK_TOOLS,
-  },
-  outage: {
-    instructions: "Outage agent (TODO)",
-    tools: [],
-  },
-  weather: {
-    instructions: "Weather agent (TODO)",
-    tools: [],
-  },
-};
+const { OPENAI_API_KEY, OPENAI_MODEL_ENDPOINT } = process.env;
 
 export class OpenAIRealTime extends VoiceAIAgentBaseClass {
   private openAiWs: WebSocket;
-  private isClosing: boolean = false;
-  private userAddress: string = "";
   private tempAddressData: any = {};
   private fullTranscript: { role: string; content: string }[] = [];
+  private hasStarted = false; // признак початку сесії
 
-  async sendKeepAlive(): Promise<void> {} // ✅ ПОВЕРНУЛИ
+  async sendKeepAlive(): Promise<void> {}
 
   constructor(session: Session) {
     super(
@@ -94,25 +37,28 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
       `[${new Date().toISOString()}] 🔌 [OpenAI] Спроба підключення до: ${OPENAI_MODEL_ENDPOINT}`,
     );
 
+    // Коннект WebSocket до OpenAI
     this.openAiWs = new WebSocket(OPENAI_MODEL_ENDPOINT, {
       headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
     });
 
+    // Відкриваємо і лухаємо порт WebSocket
     this.openAiWs.on("open", () => {
       console.log(
         `[${new Date().toISOString()}] ✅ [OpenAI] З'єднання встановлено!`,
       );
 
-      // ⚠️ CHANGED — СТАРТУЄМО З MENU
+      // СТАРТУЄМО З MENU
       const event = {
         type: "session.update",
         session: {
           type: "realtime",
-          instructions: MENU_INSTRUCTIONS, // 🔥 було DTEK_INSTRUCTIONS
+          instructions: MENU_INSTRUCTIONS,
           audio: {
             input: {
               format: { type: "audio/pcmu" },
               transcription: {
+                // model: "gpt-4o-transcribe",
                 model: "gpt-4o-mini-transcribe",
                 language: "uk",
               },
@@ -122,40 +68,60 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
               voice: "alloy",
             },
           },
-          tools: MENU_TOOLS, // 🔥 було DTEK_TOOLS
+          tools: MENU_TOOLS, //
           tool_choice: "auto",
         },
       };
 
-      // НАЛАШТУВАННЯ СЕСІЇ
+      // відправляємо НАЛАШТУВАННЯ СЕСІЇ
       this.openAiWs.send(JSON.stringify(event));
+      console.log("🔥 session.update SENT");
+      setTimeout(() => {
+        if (!this.hasStarted) {
+          console.log("🔥 fallback timeout triggered");
+          this.hasStarted = true;
 
-      // 🔥 СКАЗАТИ БОТУ "ПОЧИНАЙ ГОВОРИТИ"
-      this.openAiWs.send(
-        JSON.stringify({
-          type: "response.create",
-        }),
-      );
+          console.log("🔥 response.create SENT (fallback)");
+
+          this.openAiWs.send(
+            JSON.stringify({
+              type: "response.create",
+            }),
+          );
+        }
+      }, 1000);
     });
 
+    // відправляємо голос
     this.openAiWs.on("message", async (data: any) => {
+      console.log("🔥 message RECEIVED");
       const messageString = Buffer.isBuffer(data) ? data.toString() : data;
 
       try {
         const response = JSON.parse(messageString);
+        console.log("🔥 response.type:", response.type);
 
         // AUDIO
         if (response.type === "response.output_audio.delta" && response.delta) {
+          console.log("🔥 audio chunk RECEIVED");
           this.session.sendAudio(Buffer.from(response.delta, "base64"));
           return;
         }
 
-        // SESSION OK
-        if (response.type === "session.updated") {
-          console.log("✨ session updated");
+        if (response.type === "session.updated" && !this.hasStarted) {
+          console.log("🔥 session.updated RECEIVED");
+          this.hasStarted = true;
+
+          console.log("🔥 response.create SENT (session.updated)");
+
+          this.openAiWs.send(
+            JSON.stringify({
+              type: "response.create",
+            }),
+          );
         }
 
-        // BOT TEXT
+        // Записуємо BOT TEXT в змінну fullTranscript
         if (response.type === "response.output_audio_transcript.done") {
           this.fullTranscript.push({
             role: "assistant",
@@ -164,7 +130,7 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
           console.log("🤖 AI:", response.transcript);
         }
 
-        // USER TEXT
+        // Записуємо USER TEXT в змінну fullTranscript
         if (
           response.type ===
           "conversation.item.input_audio_transcription.completed"
@@ -180,15 +146,16 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
         // 🔥 ОСНОВНА ЛОГІКА
         // =============================
         if (response.type === "response.done") {
+          console.log("🔥 response.done RECEIVED");
           const output = response.response?.output || [];
+          console.log("🔥 output:", JSON.stringify(output, null, 2));
 
-          // 🔥 NEW — SWITCH AGENT
+          // Якщо агентом викликана функція SWITCH AGENT
           const switchCall = output.find(
             (item: any) =>
               item.type === "function_call" && item.name === "switch_agent",
           );
 
-          // 👉 ВСТАВЛЯЄТЬСЯ ПЕРЕД end_conversation
           if (switchCall) {
             const args = JSON.parse(switchCall.arguments || "{}");
             const agentName = args.agent;
@@ -215,7 +182,7 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
               JSON.stringify({
                 type: "session.update",
                 session: {
-                  type: "realtime", // 🔥 FIX
+                  type: "realtime",
                   instructions: agent.instructions,
                   tools: agent.tools,
                   tool_choice: "auto",
@@ -223,6 +190,7 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
                     input: {
                       format: { type: "audio/pcmu" },
                       transcription: {
+                        // model: "gpt-4o-transcribe",
                         model: "gpt-4o-mini-transcribe",
                         language: "uk",
                       },
@@ -236,11 +204,14 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
               }),
             );
 
+            // Агент підключається і починає говорити першим:
+            console.log("🔥 response.create SENT (after switch)");
             this.openAiWs.send(JSON.stringify({ type: "response.create" }));
 
             return;
           }
 
+          // Якщо викликана функція завершення діалогу:
           const call = output.find(
             (item: any) =>
               item.type === "function_call" && item.name === "end_conversation",
@@ -248,6 +219,7 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
 
           if (call) {
             const args = JSON.parse(call.arguments || "{}");
+            const reason = args.reason || "completed";
 
             this.tempAddressData = {
               full_address: args.full_address || "",
@@ -275,10 +247,12 @@ export class OpenAIRealTime extends VoiceAIAgentBaseClass {
 
             this.saveTranscriptAndGetUrl(conversationId).then(
               (transcriptUrl) => {
+                console.log("🔥 sendDisconnect CALLED", { reason });
                 this.session.sendDisconnect(
                   "completed" as any,
                   "AI session finished",
                   {
+                    reason: reason,
                     full_address: this.tempAddressData.full_address,
                     city: this.tempAddressData.city,
                     street: this.tempAddressData.street,

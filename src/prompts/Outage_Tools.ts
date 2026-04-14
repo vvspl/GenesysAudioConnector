@@ -1,4 +1,4 @@
-export const MENU_TOOLS = [
+export const OUTAGE_TOOLS = [
   {
     type: "function",
     name: "switch_agent",
